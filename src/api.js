@@ -2,7 +2,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL;
 
 const apiService = {
     createRoom: async (hostName) => {
-        const response = await fetch(`${API_BASE_URL}/rooms/create`, {
+        const response = await fetch(`${API_BASE_URL}/api/rooms/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ hostName })
@@ -11,7 +11,7 @@ const apiService = {
     },
 
     joinRoom: async (roomId, userName) => {
-        const response = await fetch(`${API_BASE_URL}/rooms/${roomId}/join`, {
+        const response = await fetch(`${API_BASE_URL}/api/rooms/${roomId}/join`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userName })
@@ -20,12 +20,12 @@ const apiService = {
     },
 
     getRoomInfo: async (roomId) => {
-        const response = await fetch(`${API_BASE_URL}/rooms/${roomId}`);
+        const response = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`);
         return response.json();
     },
 
     deleteRoom: async (roomId, userId) => {
-        const response = await fetch(`${API_BASE_URL}/rooms/${roomId}`, {
+        const response = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId })
