@@ -26,6 +26,8 @@ const rtcConfiguration = {
   ]
 };
 
+const apiBaseUrl = import.meta.env.VITE_API_URL;
+
 const VideoCall = () => {
     const { roomId } = useParams();
     const navigate = useNavigate();
@@ -59,7 +61,7 @@ const VideoCall = () => {
             return;
         }
 
-        const newSocket = io('http://localhost:3000', {
+        const newSocket = io(apiBaseUrl, {
             transports: ['websocket', 'polling']
         });
 
