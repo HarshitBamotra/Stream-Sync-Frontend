@@ -67,29 +67,42 @@ const VideoCall = () => {
 
         setSocket(newSocket);
 
-        // Socket event listeners
         newSocket.on('connect', () => {
             console.log('Connected to server');
             newSocket.emit('join-room', { roomId, userId });
         });
 
         newSocket.on('room-participants', (data) => {
+            console.log('Room participants:', data.participants);
             setParticipants(data.participants);
+            
+            data.participants.forEach(participant => {
+                if (participant.id !== userId) {
+                    console.log('Creating peer connection for existing participant:', participant.id);
+                    createPeerConnectionAndOffer(participant.id, newSocket);
+                }
+            });
         });
 
         newSocket.on('user-joined', (data) => {
+            console.log('User joined:', data.participant);
             setParticipants(prev => [...prev, data.participant]);
-            initializePeerConnection(data.participant.id, newSocket);
+            
         });
 
         newSocket.on('user-left', (data) => {
+            console.log('User left:', data.userId);
             setParticipants(prev => prev.filter(p => p.id !== data.userId));
             setRemoteStreams(prev => {
                 const newMap = new Map(prev);
                 newMap.delete(data.userId);
                 return newMap;
             });
-            peerConnections.current.delete(data.userId);
+            const pc = peerConnections.current.get(data.userId);
+            if (pc) {
+                pc.close();
+                peerConnections.current.delete(data.userId);
+            }
         });
 
         newSocket.on('offer', handleOffer);
@@ -138,7 +151,6 @@ const VideoCall = () => {
             alert(error.message);
         });
 
-        // Get user media
         initializeMedia();
 
         return () => {
@@ -150,7 +162,6 @@ const VideoCall = () => {
         };
     }, [roomId, userId, userName, navigate]);
 
-    // Get room info
     useEffect(() => {
         const fetchRoomInfo = async () => {
             try {
@@ -166,7 +177,6 @@ const VideoCall = () => {
         }
     }, [roomId]);
 
-    // Auto-scroll chat
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
@@ -177,6 +187,7 @@ const VideoCall = () => {
                 video: true,
                 audio: true
             });
+            console.log('Got local stream:', stream);
             setLocalStream(stream);
             if (localVideoRef.current) {
                 localVideoRef.current.srcObject = stream;
@@ -187,46 +198,87 @@ const VideoCall = () => {
         }
     };
 
-    const initializePeerConnection = (participantId, socketInstance) => {
-        if (participantId === userId) return;
+    const createPeerConnection = (participantId) => {
+        if (participantId === userId) return null;
 
+        console.log('Creating peer connection for:', participantId);
         const peerConnection = new RTCPeerConnection(rtcConfiguration);
 
-        // Add local stream tracks
         if (localStream) {
             localStream.getTracks().forEach(track => {
+                console.log('Adding track to peer connection:', track.kind);
                 peerConnection.addTrack(track, localStream);
             });
         }
 
-        // Handle remote stream
         peerConnection.ontrack = (event) => {
+            console.log('Received remote track from:', participantId);
             const [remoteStream] = event.streams;
-            setRemoteStreams(prev => new Map(prev.set(participantId, remoteStream)));
+            setRemoteStreams(prev => {
+                const newMap = new Map(prev);
+                newMap.set(participantId, remoteStream);
+                console.log('Updated remote streams:', newMap);
+                return newMap;
+            });
         };
 
-        // Handle ICE candidates
         peerConnection.onicecandidate = (event) => {
             if (event.candidate) {
-                socketInstance.emit('ice-candidate', {
+                console.log('Sending ICE candidate to:', participantId);
+                socket?.emit('ice-candidate', {
                     target: participantId,
                     candidate: event.candidate
                 });
             }
         };
 
+        peerConnection.onconnectionstatechange = () => {
+            console.log(`Connection state with ${participantId}:`, peerConnection.connectionState);
+        };
+
         peerConnections.current.set(participantId, peerConnection);
         return peerConnection;
     };
 
+    const createPeerConnectionAndOffer = async (participantId, socketInstance) => {
+        if (!localStream) {
+            console.log('No local stream available yet, waiting...');
+            return;
+        }
+
+        const peerConnection = createPeerConnection(participantId);
+        if (!peerConnection) return;
+
+        try {
+            console.log('Creating offer for:', participantId);
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            socketInstance.emit('offer', {
+                target: participantId,
+                offer: offer
+            });
+        } catch (error) {
+            console.error('Error creating offer:', error);
+        }
+    };
+
     const handleOffer = async (data) => {
-        const peerConnection = initializePeerConnection(data.sender, socket);
+        console.log('Received offer from:', data.sender);
+        
+        let peerConnection = peerConnections.current.get(data.sender);
+        if (!peerConnection) {
+            peerConnection = createPeerConnection(data.sender);
+        }
+
+        if (!peerConnection) return;
 
         try {
             await peerConnection.setRemoteDescription(data.offer);
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
 
+            console.log('Sending answer to:', data.sender);
             socket.emit('answer', {
                 target: data.sender,
                 answer: answer
@@ -237,6 +289,7 @@ const VideoCall = () => {
     };
 
     const handleAnswer = async (data) => {
+        console.log('Received answer from:', data.sender);
         const peerConnection = peerConnections.current.get(data.sender);
         if (peerConnection) {
             try {
@@ -248,6 +301,7 @@ const VideoCall = () => {
     };
 
     const handleIceCandidate = async (data) => {
+        console.log('Received ICE candidate from:', data.sender);
         const peerConnection = peerConnections.current.get(data.sender);
         if (peerConnection) {
             try {
@@ -257,6 +311,26 @@ const VideoCall = () => {
             }
         }
     };
+
+    useEffect(() => {
+        if (localStream && socket) {
+            peerConnections.current.forEach((pc, participantId) => {
+                localStream.getTracks().forEach(track => {
+                    const sender = pc.getSenders().find(s => s.track?.kind === track.kind);
+                    if (!sender) {
+                        console.log('Adding track to existing connection:', track.kind, participantId);
+                        pc.addTrack(track, localStream);
+                    }
+                });
+            });
+
+            participants.forEach(participant => {
+                if (participant.id !== userId && !peerConnections.current.has(participant.id)) {
+                    createPeerConnectionAndOffer(participant.id, socket);
+                }
+            });
+        }
+    }, [localStream, socket, participants, userId]);
 
     const toggleAudio = () => {
         if (localStream) {
@@ -288,7 +362,6 @@ const VideoCall = () => {
                     audio: true
                 });
 
-                // Replace video track in peer connections
                 const videoTrack = screenStream.getVideoTracks()[0];
                 peerConnections.current.forEach(pc => {
                     const sender = pc.getSenders().find(s =>
@@ -299,7 +372,6 @@ const VideoCall = () => {
                     }
                 });
 
-                // Update local video
                 if (localVideoRef.current) {
                     localVideoRef.current.srcObject = screenStream;
                 }
@@ -311,7 +383,6 @@ const VideoCall = () => {
                 setIsScreenSharing(true);
                 socket?.emit('toggle-screen-share', { isScreenSharing: true });
             } else {
-                // Switch back to camera
                 const cameraStream = await navigator.mediaDevices.getUserMedia({
                     video: true,
                     audio: true
@@ -384,9 +455,10 @@ const VideoCall = () => {
 
         useEffect(() => {
             if (videoRef.current && stream) {
+                console.log('Setting video stream for participant:', participant.id);
                 videoRef.current.srcObject = stream;
             }
-        }, [stream]);
+        }, [stream, participant.id]);
 
         return (
             <div className="relative bg-gray-900 rounded-lg overflow-hidden aspect-video">
